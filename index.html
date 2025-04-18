@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cancel Solana Order via Jupiter + Phantom</title>
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; max-width: 600px; margin: auto }
+    input, textarea { width: 100%; font-family: monospace; margin-bottom: .5rem }
+    button { padding: .5rem 1rem; margin-right: .5rem }
+    pre { background: #f6f6f6; padding: 1rem; white-space: pre-wrap }
+  </style>
+</head>
+<body>
+  <h1>Jupiter Limit‑Order Cancel</h1>
+
+  <p>
+    1. Connect Phantom (fills in your maker address).<br>
+    2. Paste the “locked address” (order pubkey).<br>
+    3. Click “Cancel Order” to fetch the blob, sign & send.
+  </p>
+
+  <button id="connectBtn">Connect Phantom</button>
+  <input id="maker" placeholder="Maker (your wallet)" readonly />
+
+  <label for="orderKey">Locked Address (order pubkey):</label>
+  <input id="orderKey" placeholder="e.g. GR9yFCWsJjPdYx…" />
+
+  <button id="cancelBtn" disabled>Cancel Order</button>
+  <pre id="output"></pre>
+
+  <script>
+    const { VersionedTransaction } = solanaWeb3;
+    let provider = null;
+
+    const connectBtn = document.getElementById('connectBtn');
+    const cancelBtn  = document.getElementById('cancelBtn');
+    const makerInput = document.getElementById('maker');
+    const orderInput = document.getElementById('orderKey');
+    const out        = document.getElementById('output');
+
+    window.addEventListener('load', () => {
+      if (window.solana?.isPhantom) {
+        provider = window.solana;
+      } else {
+        out.textContent = '❌ Phantom not found (serve via HTTPS/localhost).';
+        connectBtn.disabled = true;
+      }
+    });
+
+    connectBtn.onclick = async () => {
+      try {
+        const resp = await provider.connect();
+        makerInput.value = resp.publicKey.toString();
+        out.textContent    = `✅ Connected: ${makerInput.value}`;
+        cancelBtn.disabled = false;
+        connectBtn.disabled = true;
+      } catch (err) {
+        out.textContent = '❌ Connection failed: ' + err.message;
+      }
+    };
+
+    cancelBtn.onclick = async () => {
+      out.textContent = '';
+      try {
+        const maker = makerInput.value.trim();
+        const order = orderInput.value.trim();
+        if (!maker) throw new Error('Maker not set—connect Phantom first.');
+        if (!order) throw new Error('Please enter the locked address.');
+
+        // 1) fetch the cancel blob from Jupiter
+        const res = await fetch('https://lite-api.jup.ag/trigger/v1/cancelOrders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            maker,
+            computeUnitPrice: 'auto',
+            orders: [ order ]
+          })
+        });
+        const data = await res.json();
+        if (!data.transactions?.length) {
+          throw new Error(data.error || 'No transactions returned');
+        }
+        const blob = data.transactions[0];
+
+        // 2) deserialize and send via Phantom
+        const raw = Uint8Array.from(atob(blob), c=>c.charCodeAt(0));
+        const tx  = VersionedTransaction.deserialize(raw);
+
+        const { signature } = await provider.signAndSendTransaction(tx);
+        out.textContent = `✅ Cancel sent!\nSignature: ${signature}`;
+      } catch (err) {
+        out.textContent = '❌ Error: ' + err.message;
+      }
+    };
+  </script>
+</body>
+</html>
+
